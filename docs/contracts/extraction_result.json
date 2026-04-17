@@ -1,0 +1,45 @@
+{
+  "batch_id": "BATCH-20260211-001",
+  "document_id": "DOC-0001",
+  "filename": "factura_001.pdf",
+  "source_type": "pdf",
+  "route": "digital_pdf",
+  "status": "processed",
+  "fields": {
+    "tipo_documento": {
+      "value": "Factura",
+      "normalized": "factura",
+      "confidence": 0.96,
+      "page": 1,
+      "source": "rule"
+    },
+    "rfc": {
+      "value": "ABC120101AB1",
+      "normalized": "ABC120101AB1",
+      "confidence": 0.92,
+      "page": 1,
+      "source": "regex"
+    },
+    "nombre_proveedor": {
+      "value": "PROVEEDORA DEL NORTE SA DE CV",
+      "normalized": "PROVEEDORA DEL NORTE SA DE CV",
+      "confidence": 0.90,
+      "page": 1,
+      "source": "rule"
+    },
+    "fecha_documento": {
+      "value": "15/01/2026",
+      "normalized": "2026-01-15",
+      "confidence": 0.94,
+      "page": 1,
+      "source": "date_parser"
+    }
+  },
+  "quality": {
+    "score_total": 91,
+    "traffic_light": "verde",
+    "reasons": []
+  },
+  "errors": [],
+  "processed_at": "2026-02-11T14:35:00Z"
+}

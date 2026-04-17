@@ -1,0 +1,40 @@
+critical_fields:
+  - rfc
+  - fecha_documento
+
+field_weights:
+  rfc: 35
+  fecha_documento: 30
+  tipo_documento: 20
+  nombre_proveedor: 15
+
+thresholds:
+  green_min: 85
+  yellow_min: 65
+
+validation:
+  rfc_format: "^[A-Z\\u00D1&]{3,4}\\d{6}[A-Z0-9]{3}$"
+  foreign_tax_format: "^\\d{2}-\\d{7}$"
+  date_format: "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$"
+  fecha_min_year: 1990
+  fecha_max_year_offset: 1
+  nombre_min_length: 3
+
+confidence_rules:
+  rfc_valid: 1.0
+  rfc_foreign: 0.9
+  rfc_bad_format: 0.3
+  rfc_bad_date: 0.5
+  fecha_valid: 1.0
+  fecha_future: 0.3
+  fecha_too_old: 0.4
+  fecha_bad_format: 0.2
+  tipo_classified: 1.0
+  tipo_fallback: 0.3
+  nombre_valid: 1.0
+  nombre_too_short: 0.2
+
+decision_logic:
+  green: "weighted_score >= 85"
+  yellow: "65 <= weighted_score < 85"
+  red: "weighted_score < 65"

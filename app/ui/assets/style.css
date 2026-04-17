@@ -1,0 +1,113 @@
+﻿:root {
+  --prgx-purple: #930af2;
+  --prgx-cyan: #28d6e8;
+  --prgx-green: #00dc51;
+  --prgx-magenta: #ab11ed;
+  --ink: #0f1f32;
+  --soft-bg: #f6f9ff;
+}
+
+.stApp {
+  background:
+    radial-gradient(circle at 0% 0%, rgba(147, 10, 242, 0.08), transparent 35%),
+    radial-gradient(circle at 100% 15%, rgba(40, 214, 232, 0.12), transparent 45%),
+    linear-gradient(180deg, #ffffff 0%, #f8fcff 100%);
+  color: var(--ink);
+}
+
+.block-container {
+  padding-top: 4.8rem;
+}
+
+.hero-card {
+  background: linear-gradient(112deg, #f6fbff 0%, #ecf8ff 48%, #f7f1ff 100%);
+  border: 1px solid rgba(147, 10, 242, 0.22);
+  border-left: 6px solid var(--prgx-cyan);
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-bottom: 8px;
+  box-shadow: 0 8px 24px rgba(40, 214, 232, 0.08);
+  overflow: visible;
+  white-space: normal;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.hero-card * {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.section-title {
+  color: #4d1ca3;
+  font-weight: 800;
+  font-size: 2rem;
+  line-height: 1.1;
+  letter-spacing: 0.2px;
+  margin-bottom: 4px;
+}
+
+h3 {
+  color: #3b158e !important;
+}
+
+[data-testid="stFileUploader"] section,
+[data-testid="stTextInputRootElement"] input,
+[data-testid="stTextArea"] textarea {
+  border-radius: 12px !important;
+}
+
+.stButton > button {
+  border-radius: 12px !important;
+  border: 1px solid rgba(147, 10, 242, 0.35) !important;
+  background: #ffffff !important;
+  color: #3b158e !important;
+  font-weight: 600 !important;
+  transition: all 0.2s ease;
+}
+
+.stButton > button:hover {
+  border-color: var(--prgx-cyan) !important;
+  color: #1d7892 !important;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(40, 214, 232, 0.15);
+}
+
+.stButton > button[kind="primary"] {
+  background: linear-gradient(90deg, #6f2ac8 0%, #3c8fc7 100%) !important;
+  color: #ffffff !important;
+  border: none !important;
+}
+
+.stButton > button[kind="primary"]:hover {
+  background: linear-gradient(90deg, #5f20b8 0%, #2f7fb8 100%) !important;
+  color: #ffffff !important;
+}
+
+[data-testid="stLinkButton"] a,
+a {
+  color: #217da4 !important;
+}
+
+[data-testid="stNotification"] {
+  border-radius: 12px !important;
+}
+
+.status-chip {
+  display: inline-block;
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 0.18rem 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.batch-row {
+  margin: 0.35rem 0;
+  padding: 0.55rem 0.75rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(147, 10, 242, 0.12);
+}

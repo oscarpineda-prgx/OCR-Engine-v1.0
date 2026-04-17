@@ -1,0 +1,19 @@
+PDF_SOURCE_TYPES = {"pdf"}
+IMAGE_SOURCE_TYPES = {"png", "jpg", "jpeg", "tiff", "tif", "bmp"}
+SPREADSHEET_SOURCE_TYPES = {"xlsx", "xlsm", "xls", "xlsb"}
+WORD_SOURCE_TYPES = {"doc", "docx"}
+MESSAGE_SOURCE_TYPES = {"msg"}
+
+STRUCTURED_TEXT_SOURCE_TYPES = (
+    SPREADSHEET_SOURCE_TYPES
+    | WORD_SOURCE_TYPES
+    | MESSAGE_SOURCE_TYPES
+)
+
+ALLOWED_SOURCE_TYPES = (
+    PDF_SOURCE_TYPES
+    | IMAGE_SOURCE_TYPES
+    | STRUCTURED_TEXT_SOURCE_TYPES
+)
+
+ALLOWED_EXTENSIONS = {f".{extension}" for extension in ALLOWED_SOURCE_TYPES}

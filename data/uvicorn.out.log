@@ -1,0 +1,2 @@
+INFO:     127.0.0.1:1537 - "GET /api/v1/batches/BATCH-20260409-074053-53cceb HTTP/1.1" 200 OK
+INFO:     127.0.0.1:1538 - "GET /api/v1/health HTTP/1.1" 200 OK

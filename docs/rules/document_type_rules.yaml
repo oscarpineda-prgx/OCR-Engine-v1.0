@@ -1,0 +1,164 @@
+default_type: "Documentos Varios"
+
+rules:
+  - name: "Carta Anexo a Convenio Entrega a Cedis"
+    any_terms:
+      - "carta anexo b convenio entrega en cedis"
+      - "carta anexo convenio entrega en cedis"
+      - "carta anexo convenio en cedis"
+
+  - name: "Carta Intercedis"
+    any_terms:
+      - "carta intercedis"
+      - "intercedis"
+    all_terms:
+      - "carta"
+
+  - name: "Excepciones a Condiciones Logisticas"
+    any_terms:
+      - "formato excepciones a condiciones logisticas"
+      - "excepciones a condiciones logisticas"
+
+  - name: "Adendums Soporte"
+    any_terms:
+      - "adendum"
+      - "adendums"
+      - "cartas de acuerdos de operaciones logisticas"
+      - "acuerdos de operaciones logisticas"
+      - "incrementando su costo"
+      - "incremento de costo"
+
+  - name: "Carta Soporte Descuentos"
+    all_terms:
+      - "carta soporte"
+      - "descuento"
+
+  - name: "Carta Soporte Costos"
+    all_terms:
+      - "carta soporte"
+    any_terms:
+      - "costo"
+      - "costos"
+    none_terms:
+      - "descuento"
+      - "descuentos"
+
+  - name: "Solicitud cambio Descuento"
+    all_terms:
+      - "solicitud de cambio"
+      - "descuento"
+
+  - name: "Solicitud Cambio Costo"
+    all_terms:
+      - "solicitud de cambio"
+    any_terms:
+      - "costo"
+      - "costos"
+    none_terms:
+      - "descuento"
+      - "descuentos"
+
+  - name: "Convenio Modificatorio Cedis"
+    all_terms:
+      - "convenio modificatorio"
+      - "cedis"
+
+  - name: "Convenio Modificatorio Local"
+    any_terms:
+      - "carta anexo b convenio entrega en tienda"
+      - "convenio modificatorio"
+    all_terms:
+      - "tienda"
+
+  - name: "Comida Rapida"
+    any_terms:
+      - "contrato comida rapida"
+      - "comida rapida"
+
+  - name: "Convenio de Manufactura y Suministros"
+    any_terms:
+      - "convenio de manufactura y suministros"
+      - "convenio de manufactura y suministro de productos"
+
+  - name: "Convenio Entrega Cedis"
+    any_terms:
+      - "convenio entrega en cedis"
+      - "convenio entrega cedis"
+    none_terms:
+      - "carta anexo"
+
+  - name: "Convenio Entrega Local"
+    any_terms:
+      - "convenio proveedores locales"
+      - "proveedores locales"
+
+  - name: "Convenio Factoraje"
+    any_terms:
+      - "convenio relativo a la mecanica operativa del sistema de factoraje"
+      - "factoraje"
+    all_terms:
+      - "convenio"
+
+  - name: "Convenio Genericos"
+    any_terms:
+      - "convenio oxxo genericos"
+      - "oxxo genericos"
+
+  - name: "Convenio Logistico"
+    any_terms:
+      - "convenio logistico"
+
+  - name: "Convenio Condiciones Comerciales"
+    any_terms:
+      - "convenio condiciones comerciales"
+    all_terms:
+      - "condiciones comerciales"
+
+  - name: "Importaciones Marca Propia"
+    any_terms:
+      - "contrato importaciones marcas propias"
+      - "importaciones marcas propias"
+
+  - name: "Importations Contract"
+    any_terms:
+      - "importations contract of store brand"
+      - "importations contract"
+
+  - name: "Logistico MP"
+    any_terms:
+      - "contrato logistico marca propia personas morales"
+      - "logistico marca propia personas morales"
+
+  - name: "Marca Propia CEDIS"
+    any_terms:
+      - "contrato entrega en cedis marca propia personas fisicas"
+      - "entrega en cedis marca propia personas fisicas"
+
+  - name: "Marca Propia Tiendas"
+    any_terms:
+      - "contrato marca propia personas morales entrega en tienda"
+      - "marca propia personas morales entrega en tienda"
+
+  - name: "Portal de Proveedores"
+    any_terms:
+      - "convenio para acceso a portal de proveedores"
+      - "convenio portal de proveedores"
+      - "portal de proveedores"
+
+  - name: "Product Supply Agreement"
+    any_terms:
+      - "product supply agreement"
+
+  - name: "Proveedores Nacionales y Regionales Cedis"
+    any_terms:
+      - "proveedores nacionales y regionales a cedis"
+
+  - name: "Suministro de Materias Primas"
+    any_terms:
+      - "convenio de suministro de materias primas personas morales"
+      - "carta anexo a convenio de suministro de materias primas a personas morales"
+
+  - name: "Suministro de Productos de Linea en CEDIS"
+    any_terms:
+      - "contrato de suministro de productos de linea en cedis"
+      - "suministro de productos de linea en cedis"

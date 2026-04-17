@@ -1,0 +1,5 @@
+doc_id,filename,source_type,is_scanned,tipo_documento_expected,rfc_expected,nombre_proveedor_expected,fecha_documento_expected,fecha_documento_iso,split,notes
+DOC-0001,factura_001.pdf,pdf,false,Factura,ABC120101AB1,PROVEEDORA DEL NORTE SA DE CV,15/01/2026,2026-01-15,train,PDF digital
+DOC-0002,scan_045.tiff,tiff,true,Nota de credito,XYZ9902159K2,SUMINISTROS DEL CENTRO SA,2026-01-22,2026-01-22,train,Escaneado borroso
+DOC-0003,img_120.jpg,jpg,true,Orden de compra,AAA0102031H0,INDUSTRIAS DEL BAJIO SA DE CV,22-01-2026,2026-01-22,validation,Contraste bajo
+DOC-0004,doc_078.pdf,pdf,true,Factura,DEF850630MN3,COMERCIALIZADORA RIO SA DE CV,23.01.2026,2026-01-23,holdout,PDF escaneado

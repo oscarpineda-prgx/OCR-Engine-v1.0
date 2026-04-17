@@ -1,0 +1,13 @@
+# Vendor name matching configuration
+# These values can be tuned based on ground truth evaluation
+
+thresholds:
+  short_name: 0.85   # similarity threshold for names with <= 2 tokens
+  long_name: 0.82    # similarity threshold for names with 3+ tokens
+
+weights:
+  ratio: 0.30        # raw similarity ratio weight
+  token_sort: 0.30   # order-invariant token sort weight
+  token_set: 0.20    # token set ratio weight (subset matching)
+  contains: 0.10     # contains bonus weight
+  same_first: 0.10   # same first token bonus weight
