@@ -27,6 +27,8 @@ from app.services.extraction.file_types import ALLOWED_EXTENSIONS
 from app.services.extraction.ocr_image import extract_text_from_image_ocr
 from app.services.extraction.ocr_pdf import extract_text_from_pdf_ocr
 from app.services.extraction.structured_documents import extract_text_from_structured_document
+from app.services.exports.batch_export import EXPORT_HEADERS, build_batch_export_rows
+from app.services.link2026_control import load_link2026_source_paths
 from app.services.parsing.fields import (
     extract_fecha_documento,
     extract_nombre_proveedor,
@@ -43,6 +45,7 @@ from app.domain.schemas import (
 )
 from app.services.quality.scoring import score_document_fields
 from app.services.vendor_master.matcher import VendorMasterResolver
+from app.services.vendor_master.path_context import resolve_vendor_from_path
 
 # Unified single-pass OCR (new)
 try:
@@ -211,8 +214,11 @@ def _process_single_document(
         nombre_proveedor = None
 
         if route in {"digital_pdf", "ocr_image", "structured_document"}:
-            fecha_documento = extract_fecha_documento(extracted_text or "")
             tipo_documento = extract_tipo_documento(extracted_text or "")
+            fecha_documento = extract_fecha_documento(
+                extracted_text or "",
+                tipo_documento=tipo_documento,
+            )
             nombre_proveedor = extract_nombre_proveedor(extracted_text or "")
             rfc = extract_rfc(extracted_text or "")
 
@@ -520,8 +526,9 @@ def process_batch(batch_key: str, db: Session = Depends(get_db)) -> dict:
     db.commit()
     db.refresh(batch)
 
-    # Prepare: load vendor master once, build doc-id map
+    # Prepare: load vendor master once, build doc-id/source maps
     vendor_master_resolver = VendorMasterResolver.from_db(db)
+    source_paths_by_document_id = load_link2026_source_paths(batch_key)
     doc_map: dict[int, Document] = {}
     tasks: list[tuple[int, str, str]] = []
 
@@ -613,6 +620,14 @@ def process_batch(batch_key: str, db: Session = Depends(get_db)) -> dict:
             nombre_proveedor=doc.nombre_proveedor,
         )
 
+        path_vendor_fallback = None
+        if not doc.rfc and not doc.nombre_proveedor:
+            source_path = source_paths_by_document_id.get(doc.id) or doc.file_path
+            path_vendor_fallback = resolve_vendor_from_path(source_path, vendor_master_resolver)
+            if path_vendor_fallback:
+                doc.rfc = path_vendor_fallback.rfc
+                doc.nombre_proveedor = path_vendor_fallback.nombre_proveedor
+
         # Quality scoring
         quality = score_document_fields(
             rfc=doc.rfc,
@@ -626,13 +641,19 @@ def process_batch(batch_key: str, db: Session = Depends(get_db)) -> dict:
         doc.field_confidence_json = json.dumps(quality["field_confidence"])
 
         # Audit log
+        log_details = {
+            "route": result.route,
+            "processing_route": result.processing_route,
+            "rfc_hint": result.rfc_hint,
+            "fecha_hint": result.fecha_hint,
+            "field_confidence": quality["field_confidence"],
+        }
+        if path_vendor_fallback:
+            log_details["path_vendor_fallback"] = path_vendor_fallback.to_log_dict()
+
         db.add(DocumentProcessingLog(
             document_id=doc.id, action="processed", status="success",
-            details_json=json.dumps({
-                "route": result.route, "processing_route": result.processing_route,
-                "rfc_hint": result.rfc_hint, "fecha_hint": result.fecha_hint,
-                "field_confidence": quality["field_confidence"],
-            }),
+            details_json=json.dumps(log_details),
         ))
 
         processed_count += 1
@@ -678,38 +699,12 @@ def export_batch_csv(batch_key: str, db: Session = Depends(get_db)) -> FileRespo
     export_dir.mkdir(parents=True, exist_ok=True)
     export_path = export_dir / f"{batch_key}.csv"
 
-    headers = [
-        "batch_key", "document_id", "filename", "source_type", "file_size_bytes",
-        "file_size_kb", "file_path", "mime_type", "route", "processing_route", "status",
-        "rfc", "fecha_documento", "tipo_documento", "nombre_proveedor",
-        "quality_score", "quality_traffic_light", "quality_reasons", "error_message",
-    ]
+    rows = build_batch_export_rows(batch, documents)
 
     with export_path.open("w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=headers)
+        writer = csv.DictWriter(csvfile, fieldnames=EXPORT_HEADERS)
         writer.writeheader()
-        for doc in documents:
-            writer.writerow({
-                "batch_key": batch.batch_key,
-                "document_id": doc.id,
-                "filename": doc.filename,
-                "source_type": doc.source_type,
-                "file_size_bytes": doc.file_size,
-                "file_size_kb": round((doc.file_size or 0) / 1024, 2),
-                "file_path": doc.file_path,
-                "mime_type": doc.mime_type,
-                "route": doc.route,
-                "processing_route": doc.processing_route,
-                "status": doc.status,
-                "rfc": doc.rfc,
-                "fecha_documento": doc.fecha_documento,
-                "tipo_documento": doc.tipo_documento,
-                "nombre_proveedor": doc.nombre_proveedor,
-                "quality_score": doc.quality_score,
-                "quality_traffic_light": doc.quality_traffic_light,
-                "quality_reasons": doc.quality_reasons,
-                "error_message": doc.error_message,
-            })
+        writer.writerows(rows)
 
     return FileResponse(path=str(export_path), media_type="text/csv", filename=export_path.name)
 
@@ -729,32 +724,7 @@ def export_batch_xlsx(batch_key: str, db: Session = Depends(get_db)) -> FileResp
     export_dir.mkdir(parents=True, exist_ok=True)
     export_path = export_dir / f"{batch_key}.xlsx"
 
-    rows = [
-        {
-            "batch_key": batch.batch_key,
-            "document_id": doc.id,
-            "filename": doc.filename,
-            "source_type": doc.source_type,
-            "file_size_bytes": doc.file_size,
-            "file_size_kb": round((doc.file_size or 0) / 1024, 2),
-            "file_path": doc.file_path,
-            "mime_type": doc.mime_type,
-            "route": doc.route,
-            "processing_route": doc.processing_route,
-            "status": doc.status,
-            "rfc": doc.rfc,
-            "fecha_documento": doc.fecha_documento,
-            "tipo_documento": doc.tipo_documento,
-            "nombre_proveedor": doc.nombre_proveedor,
-            "quality_score": doc.quality_score,
-            "quality_traffic_light": doc.quality_traffic_light,
-            "quality_reasons": doc.quality_reasons,
-            "error_message": doc.error_message,
-        }
-        for doc in documents
-    ]
-
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(build_batch_export_rows(batch, documents), columns=EXPORT_HEADERS)
     df.to_excel(export_path, index=False)
 
     return FileResponse(
@@ -948,6 +918,8 @@ def retry_failed_documents(batch_key: str, db: Session = Depends(get_db)) -> dic
     success_count = 0
     failed_count = 0
     doc_map = {doc.id: doc for doc in failed_docs}
+    vendor_master_resolver = VendorMasterResolver.from_db(db)
+    source_paths_by_document_id = load_link2026_source_paths(batch_key)
 
     for result in results:
         doc = doc_map.get(result.doc_id)
@@ -965,17 +937,33 @@ def retry_failed_documents(batch_key: str, db: Session = Depends(get_db)) -> dic
         doc.tipo_documento = result.tipo_documento
         doc.nombre_proveedor = result.nombre_proveedor
 
+        path_vendor_fallback = None
         if result.status == "processed":
+            doc.rfc, doc.nombre_proveedor = vendor_master_resolver.fill_missing_fields(
+                rfc=doc.rfc,
+                nombre_proveedor=doc.nombre_proveedor,
+            )
+            if not doc.rfc and not doc.nombre_proveedor:
+                source_path = source_paths_by_document_id.get(doc.id) or doc.file_path
+                path_vendor_fallback = resolve_vendor_from_path(source_path, vendor_master_resolver)
+                if path_vendor_fallback:
+                    doc.rfc = path_vendor_fallback.rfc
+                    doc.nombre_proveedor = path_vendor_fallback.nombre_proveedor
+
             success_count += 1
         else:
             failed_count += 1
 
         # Audit log for retry
+        log_details = {"route": result.route, "processing_route": result.processing_route}
+        if path_vendor_fallback:
+            log_details["path_vendor_fallback"] = path_vendor_fallback.to_log_dict()
+
         db.add(DocumentProcessingLog(
             document_id=doc.id, action="retried", status=result.status,
             error_category=result.error_category,
             error_message=result.error_message,
-            details_json=json.dumps({"route": result.route, "processing_route": result.processing_route}),
+            details_json=json.dumps(log_details),
         ))
 
     # Recompute batch status

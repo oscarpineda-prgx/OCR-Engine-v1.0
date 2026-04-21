@@ -19,3 +19,6 @@ data/failed/*
 !data/failed/.gitkeep
 data/exports/*
 !data/exports/.gitkeep
+data/cleanup_backups/
+data/control/link2026/backups/
+data/logs/

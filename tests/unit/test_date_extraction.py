@@ -75,3 +75,40 @@ def test_month_first_textual_date_with_comma():
     text = "Fecha: Agosto 26, 2016"
     result = extract_fecha_documento(text)
     assert result == "2016-08-26"
+
+
+def test_omits_historical_legal_public_deed_date_and_uses_signature_date():
+    text = (
+        "Ser una persona moral constituida conforme a las leyes vigentes en los "
+        "Estados Unidos Mexicanos, segun se acredita con la escritura publica "
+        "numero 47,162 de fecha 9 mayo 1996, pasada ante la fe del Notario "
+        "Publico numero 103 e inscrita en el Registro Publico de la Propiedad "
+        "y del Comercio.\n"
+        "Habiendo sido leido el presente Contrato por las partes y enteradas "
+        "del contenido y alcance legal de cada una de sus estipulaciones, lo "
+        "firman en presencia de dos testigos que lo suscriben en la Ciudad de "
+        "Mexico a los 20 dias del mes de SEPTIEMBRE del 2022."
+    )
+    result = extract_fecha_documento(
+        text,
+        tipo_documento="Suministro de Productos de Linea en CEDIS",
+    )
+    assert result == "2022-09-20"
+
+
+def test_omits_dates_before_2000():
+    assert extract_fecha_documento("Fecha: 01/06/1980") is None
+
+
+def test_noisy_signature_date_with_split_year():
+    text = (
+        'Todo lo anteriormente expuesto es voluntad de ambas partes y acuerdan '
+        'firmar el presente convenio, siendo el día 28 | de Febrero! de 20/22 |'
+    )
+    result = extract_fecha_documento(text, tipo_documento="Convenio Entrega Local")
+    assert result == "2022-02-28"
+
+
+def test_noisy_split_year_outside_range_is_rejected():
+    text = "firmar el presente convenio, siendo el día 28 de Febrero de 21/01"
+    assert extract_fecha_documento(text, tipo_documento="Convenio Entrega Local") is None

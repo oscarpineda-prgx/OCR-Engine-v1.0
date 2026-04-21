@@ -439,6 +439,7 @@ class TestExportBatchXlsx:
         frame = pd.read_excel(export_path)
         row = frame.iloc[0].to_dict()
 
+        assert frame.columns.tolist()[2] == "link"
         assert row["document_id"] > 0
         assert row["file_size_bytes"] == 188766
         assert row["file_size_kb"] == round(188766 / 1024, 2)

@@ -214,9 +214,9 @@ class TestExtractFechaDocumento:
         text = "Fecha: 2030-12-31"
         assert extract_fecha_documento(text) == "2030-12-31"
 
-    def test_old_date_still_extracted(self):
+    def test_old_date_is_ignored(self):
         text = "Fecha: 01/06/1980"
-        assert extract_fecha_documento(text) == "1980-06-01"
+        assert extract_fecha_documento(text) is None
 
     def test_textual_date_with_siendo_el_dia(self):
         text = "siendo el dia 10 de abril de 2024 se firma el contrato"

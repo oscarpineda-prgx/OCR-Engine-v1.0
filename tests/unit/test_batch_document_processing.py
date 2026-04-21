@@ -14,7 +14,10 @@ def test_process_single_structured_document_extracts_required_fields(monkeypatch
         lambda _: "Razón Social: VICTOR MANUEL BACA APODACA\nRFC: BAAV7822025P7",
     )
     monkeypatch.setattr("app.api.routes.batches.extract_rfc", lambda _: "BAAV7822025P7")
-    monkeypatch.setattr("app.api.routes.batches.extract_fecha_documento", lambda _: "2014-05-24")
+    monkeypatch.setattr(
+        "app.api.routes.batches.extract_fecha_documento",
+        lambda _, tipo_documento=None: "2014-05-24",
+    )
     monkeypatch.setattr("app.api.routes.batches.extract_tipo_documento", lambda _: "Convenio Entrega Local")
     monkeypatch.setattr(
         "app.api.routes.batches.extract_nombre_proveedor",

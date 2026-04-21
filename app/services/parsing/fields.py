@@ -273,6 +273,10 @@ MONTH_ABBREVS: dict[str, int] = {
     "sep": 9, "set": 9, "oct": 10, "nov": 11, "dic": 12,
 }
 
+DOCUMENT_DATE_MIN = datetime(year=2000, month=1, day=1)
+DOCUMENT_SPLIT_YEAR_MIN = 2000
+DOCUMENT_SPLIT_YEAR_MAX = 2100
+
 
 def _match_month_name(raw: str) -> int | None:
     """Match a Spanish month name, handling OCR-truncated variants."""
@@ -366,6 +370,45 @@ MONTH_FIRST_TEXTUAL_DATE_SHORT_YEAR_PATTERN = re.compile(
 NOISY_OCR_TEXTUAL_DATE_PATTERN = re.compile(
     r"(?i)\b([0-9OILS]{1,2})\s*([a-zA-Z]{3,6})[0-9OILS]?\s*([0-9OILS]{2,4})\b"
 )
+SIGNATURE_FORMULA_DATE_PATTERN = re.compile(
+    "(?i)\\b(?:a\\s+los?|los?)\\s+([0-9OILS]{1,2})\\s+"
+    "d[i\u00ED]as?\\s+del\\s+mes\\s+de\\s+"
+    "([a-zA-Z0-9\u00E1\u00E9\u00ED\u00F3\u00FA\u00F1]{3,15})\\s+"
+    "(?:de|del)\\s+([0-9OILS]{2,4})\\b"
+)
+NOISY_SPLIT_YEAR_TEXTUAL_DATE_PATTERN = re.compile(
+    "(?i)\\b(?:siendo\\s+el\\s+d[i\u00ED]a\\s*)?"
+    "([0-9OILS]{1,2})\\s*[\\|\\[\\]!¡,.;:_-]*\\s*(?:de)?\\s+"
+    "([a-zA-Z0-9\u00E1\u00E9\u00ED\u00F3\u00FA\u00F1]{3,15})\\s*"
+    "[\\|\\[\\]!¡,.;:_-]*\\s*(?:de|del)?\\s*"
+    "([0-9OILS]{2}\\s*[/\\|\\[\\]!¡,.;:_-]+\\s*[0-9OILS]{2})\\b"
+)
+HISTORICAL_LEGAL_DATE_CONTEXT_PATTERN = re.compile(
+    r"\b("
+    r"ley|leyes|ley federal|leyes vigentes|gobierno|gubernamental|"
+    r"estados unidos mexicanos|diario oficial|federacion|secretaria|"
+    r"escritura publica|instrumento publico|fe del notario|notario publico|notarial|"
+    r"registro publico|registro publico de la propiedad|propiedad y del comercio|"
+    r"decreto|codigo civil|codigo de comercio|articulo|constitucion"
+    r")\b"
+)
+SIGNATURE_CONTEXT_TERMS = (
+    "lo firman",
+    "firman",
+    "firma",
+    "firmado",
+    "suscriben",
+    "suscribe",
+    "presente contrato",
+    "contrato",
+    "partes",
+    "testigos",
+    "representante legal",
+)
+SIGNATURE_HEAVY_DOCUMENT_TYPES = {
+    "suministro de productos de linea en cedis",
+    "convenio entrega local",
+}
 
 
 def normalize_date(value: str) -> str | None:
@@ -377,19 +420,54 @@ def normalize_date(value: str) -> str | None:
     return None
 
 
+def _is_before_document_min_date(normalized_date: str) -> bool:
+    try:
+        parsed = datetime.strptime(normalized_date, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return parsed < DOCUMENT_DATE_MIN
+
+
 def _normalize_ocr_digits(value: str) -> str:
     table = str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "S": "5"})
     return (value or "").translate(table)
 
 
+SPLIT_YEAR_FRAGMENT_PATTERN = re.compile(r"\s*([0-9]{2})\s*[^0-9]+\s*([0-9]{2})\s*")
+
+
+def _normalize_split_year_fragment(value: str) -> int | None:
+    normalized = _normalize_ocr_digits(value)
+    match = SPLIT_YEAR_FRAGMENT_PATTERN.fullmatch(normalized)
+    if not match:
+        return None
+
+    year = int(f"{match.group(1)}{match.group(2)}")
+    if DOCUMENT_SPLIT_YEAR_MIN <= year <= DOCUMENT_SPLIT_YEAR_MAX:
+        return year
+    return None
+
+
 def _normalize_year_fragment(value: str) -> int | None:
-    digits = re.sub(r"\D", "", _normalize_ocr_digits(value))
+    normalized = _normalize_ocr_digits(value)
+    split_year = _normalize_split_year_fragment(value)
+    if split_year is not None:
+        return split_year
+    if SPLIT_YEAR_FRAGMENT_PATTERN.fullmatch(normalized):
+        return None
+
+    digits = re.sub(r"\D", "", normalized)
     if len(digits) == 2:
         yy = int(digits)
         return 1900 + yy if yy >= 30 else 2000 + yy
     if len(digits) == 4:
         return int(digits)
     return None
+
+
+def _has_split_year_tail(source: str, year_end: int) -> bool:
+    tail = source[year_end:year_end + 12]
+    return re.match(r"\s*[/\|\[\]!¡,.;:_-]+\s*[0-9OILS]{2}\b", tail, flags=re.IGNORECASE) is not None
 
 
 def _parse_textual_date_flexible(day_raw: str, month_raw: str, year_raw: str) -> str | None:
@@ -453,27 +531,6 @@ def _parse_month_first_textual_date_flexible(month_raw: str, day_raw: str, year_
         return None
 
 
-def _extract_noisy_ocr_textual_dates(source: str) -> list[tuple[int, int, str]]:
-    candidates: list[tuple[int, int, str]] = []
-
-    for m in NOISY_OCR_TEXTUAL_DATE_PATTERN.finditer(source or ""):
-        normalized = _parse_textual_date_flexible(m.group(1), m.group(2), m.group(3))
-        if not normalized:
-            continue
-
-        ctx = source[max(0, m.start() - 70): m.end() + 70].lower()
-        score = 7
-        if "fecha de entrega" in ctx:
-            score += 12
-        if "fecha" in ctx:
-            score += 2
-        if "diario oficial de la federacion" in ctx or "ley federal de proteccion de datos" in ctx:
-            score -= 10
-        candidates.append((score, m.start(), normalized))
-
-    return candidates
-
-
 def _parse_textual_date(day_raw: str, month_raw: str, year_raw: str) -> str | None:
     day_raw = _normalize_ocr_digits(day_raw)
     year_raw = _normalize_ocr_digits(year_raw)
@@ -510,7 +567,83 @@ def _parse_numeric_textual_date(day_raw: str, month_raw: str, year_raw: str) -> 
         return None
 
 
-def extract_fecha_documento(text: str) -> str | None:
+def _date_context(source: str, start: int, end: int, *, before: int = 160, after: int = 160) -> str:
+    raw = source[max(0, start - before): min(len(source), end + after)]
+    return _strip_accents(raw.lower())
+
+
+def _is_signature_heavy_document_type(tipo_documento: str | None) -> bool:
+    normalized = _normalize_for_doc_type(tipo_documento or "")
+    return normalized in SIGNATURE_HEAVY_DOCUMENT_TYPES
+
+
+def _score_date_context(ctx: str, base: int, tipo_documento: str | None = None) -> int:
+    score = base
+    if "siendo el dia" in ctx:
+        score += 8
+    if "fecha del documento" in ctx or "fecha de documento" in ctx or "fecha de emision" in ctx:
+        score += 6
+    if "fecha de entrega" in ctx:
+        score += 12
+    if "anexo al convenio" in ctx:
+        score += 3
+    if "fecha" in ctx:
+        score += 2
+
+    signature_hits = sum(1 for term in SIGNATURE_CONTEXT_TERMS if term in ctx)
+    if signature_hits:
+        score += min(18, signature_hits * 5)
+        if _is_signature_heavy_document_type(tipo_documento):
+            score += 8
+
+    return score
+
+
+def _append_fecha_candidate(
+    candidates: list[tuple[int, int, str]],
+    source: str,
+    start: int,
+    end: int,
+    normalized: str,
+    base: int,
+    tipo_documento: str | None = None,
+) -> None:
+    if _is_before_document_min_date(normalized):
+        logger.debug("Fecha skipped before %s: %s", DOCUMENT_DATE_MIN.date(), normalized)
+        return
+
+    ctx = _date_context(source, start, end)
+    if HISTORICAL_LEGAL_DATE_CONTEXT_PATTERN.search(ctx):
+        logger.debug("Fecha skipped by legal/government context: %s", normalized)
+        return
+
+    candidates.append((_score_date_context(ctx, base, tipo_documento), start, normalized))
+
+
+def _extract_noisy_ocr_textual_dates(
+    source: str,
+    tipo_documento: str | None = None,
+) -> list[tuple[int, int, str]]:
+    candidates: list[tuple[int, int, str]] = []
+
+    for m in NOISY_OCR_TEXTUAL_DATE_PATTERN.finditer(source or ""):
+        normalized = _parse_textual_date_flexible(m.group(1), m.group(2), m.group(3))
+        if not normalized:
+            continue
+        _append_fecha_candidate(
+            candidates,
+            source,
+            m.start(),
+            m.end(),
+            normalized,
+            7,
+            tipo_documento,
+        )
+
+    return candidates
+
+
+def extract_fecha_documento(text: str, tipo_documento: str | None = None) -> str | None:
     if not text:
         return None
 
@@ -522,23 +655,15 @@ def extract_fecha_documento(text: str) -> str | None:
             normalized = normalize_date(m.group(1))
             if not normalized:
                 continue
-            ctx = source[max(0, m.start() - 60): m.end() + 60].lower()
-            score = 2
-            if "siendo el dia" in ctx or "siendo el día" in ctx:
-                score += 8
-            if "fecha del documento" in ctx or "fecha de documento" in ctx or "fecha de emision" in ctx:
-                score += 6
-            if "fecha de entrega" in ctx:
-                score += 12
-            if "firma" in ctx or "firmar" in ctx:
-                score += 3
-            if "anexo al convenio" in ctx:
-                score += 3
-            if "fecha" in ctx:
-                score += 2
-            if "diario oficial de la federacion" in ctx or "ley federal de proteccion de datos" in ctx:
-                score -= 10
-            candidates.append((score, m.start(), normalized))
+            _append_fecha_candidate(
+                candidates,
+                source,
+                m.start(1),
+                m.end(1),
+                normalized,
+                2,
+                tipo_documento,
+            )
 
     for pattern, parser, base in [
         (TEXTUAL_DATE_PATTERN, _parse_textual_date, 4),
@@ -550,30 +675,26 @@ def extract_fecha_documento(text: str) -> str | None:
         (SLASH_TEXTUAL_DATE_PATTERN, _parse_textual_date_flexible, 8),
         (MONTH_FIRST_TEXTUAL_DATE_PATTERN, _parse_month_first_textual_date_flexible, 8),
         (MONTH_FIRST_TEXTUAL_DATE_SHORT_YEAR_PATTERN, _parse_month_first_textual_date_flexible, 8),
+        (SIGNATURE_FORMULA_DATE_PATTERN, _parse_textual_date_flexible, 14),
+        (NOISY_SPLIT_YEAR_TEXTUAL_DATE_PATTERN, _parse_textual_date_flexible, 12),
     ]:
         for m in pattern.finditer(source):
+            if _has_split_year_tail(source, m.end(3)):
+                continue
             normalized = parser(m.group(1), m.group(2), m.group(3))
             if not normalized:
                 continue
-            ctx = source[max(0, m.start() - 70): m.end() + 70].lower()
-            score = base
-            if "siendo el dia" in ctx or "siendo el día" in ctx:
-                score += 8
-            if "fecha del documento" in ctx or "fecha de documento" in ctx or "fecha de emision" in ctx:
-                score += 6
-            if "fecha de entrega" in ctx:
-                score += 12
-            if "firma" in ctx or "firmar" in ctx:
-                score += 3
-            if "anexo al convenio" in ctx:
-                score += 3
-            if "fecha" in ctx:
-                score += 2
-            if "diario oficial de la federacion" in ctx or "ley federal de proteccion de datos" in ctx:
-                score -= 10
-            candidates.append((score, m.start(), normalized))
+            _append_fecha_candidate(
+                candidates,
+                source,
+                m.start(),
+                m.end(),
+                normalized,
+                base,
+                tipo_documento,
+            )
 
-    candidates.extend(_extract_noisy_ocr_textual_dates(source))
+    candidates.extend(_extract_noisy_ocr_textual_dates(source, tipo_documento))
 
     if not candidates:
         logger.debug("No fecha match found in text")

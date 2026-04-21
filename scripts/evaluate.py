@@ -158,14 +158,14 @@ def _run_pipeline(file_path: Path) -> dict[str, str | None]:
         logger.error("RFC extraction failed for %s: %s", fp, exc)
 
     try:
-        fecha = extract_fecha_documento(text)
-    except Exception as exc:
-        logger.error("Fecha extraction failed for %s: %s", fp, exc)
-
-    try:
         tipo = extract_tipo_documento(text)
     except Exception as exc:
         logger.error("Tipo documento extraction failed for %s: %s", fp, exc)
+
+    try:
+        fecha = extract_fecha_documento(text, tipo_documento=tipo)
+    except Exception as exc:
+        logger.error("Fecha extraction failed for %s: %s", fp, exc)
 
     try:
         proveedor = extract_nombre_proveedor(text)
