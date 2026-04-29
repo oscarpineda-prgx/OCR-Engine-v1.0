@@ -85,7 +85,7 @@ LEGAL_ENTITY_TOKENS = {
     "SA", "S", "A", "DE", "CV", "C", "V",
     "SACV", "SADECV",
     "SOCIEDAD", "ANONIMA", "ANONIMO",
-    "COMPANIA", "COMPANY", "CIA",
+    "COMPANIA", "COMPAIA", "COMPANY", "CIA",
     "LIMITADA", "LTDA", "LTD", "LLC",
     "INC", "CORP", "CORPORATION",
     "THE", "AND", "Y",
@@ -217,15 +217,25 @@ class VendorMasterResolver:
     @classmethod
     def from_db(cls, db: Session) -> VendorMasterResolver:
         records = db.query(VendorMaster).all()
-        entries = [
-            VendorMasterEntry(
-                vendor_name=(record.vendor_name or "").strip(),
-                rfc=canonicalize_rfc(record.rfc or record.rfc_normalized),
-                vendor_name_normalized=record.vendor_name_normalized or "",
-                vendor_name_core=record.vendor_name_core or "",
+        entries: list[VendorMasterEntry] = []
+        for record in records:
+            vendor_name = (record.vendor_name or "").strip()
+            normalized_name = normalize_vendor_name_for_match(vendor_name) if vendor_name else ""
+            if not normalized_name:
+                normalized_name = record.vendor_name_normalized or ""
+
+            core_name = core_vendor_name(normalized_name) if normalized_name else ""
+            if not core_name:
+                core_name = record.vendor_name_core or ""
+
+            entries.append(
+                VendorMasterEntry(
+                    vendor_name=vendor_name,
+                    rfc=canonicalize_rfc(record.rfc or record.rfc_normalized),
+                    vendor_name_normalized=normalized_name,
+                    vendor_name_core=core_name,
+                )
             )
-            for record in records
-        ]
         return cls(entries)
 
     def _name_candidates(self, core_name: str) -> list[VendorMasterEntry]:

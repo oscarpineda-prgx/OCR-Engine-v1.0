@@ -30,6 +30,28 @@ def test_extract_text_from_xlsx_flattens_sheets_and_rows(tmp_path):
     assert "Tipo de Documento | Convenio Entrega Local" in extracted
 
 
+def test_extract_text_from_xlsx_adds_nearby_field_hints(tmp_path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Carta"
+    sheet["E2"] = "RAZON SOCIAL"
+    sheet["E3"] = "DISTRIBUIDORA BAJA CALIFORNIANA"
+    sheet["E4"] = "CATEGORIA"
+    sheet["F4"] = "ELABORA"
+    sheet["F5"] = "MARTIN PULIDO SUENAGA"
+    sheet["B8"] = "RFC"
+    sheet["C8"] = "DBC010203AB1"
+
+    file_path = tmp_path / "carta.xlsx"
+    workbook.save(file_path)
+
+    extracted = _extract_text_from_openpyxl_workbook(str(file_path))
+
+    assert "Razon Social: DISTRIBUIDORA BAJA CALIFORNIANA" in extracted
+    assert "RFC: DBC010203AB1" in extracted
+    assert "Proveedor: MARTIN PULIDO SUENAGA" not in extracted
+
+
 def test_dispatches_docx_to_docx_extractor(monkeypatch, tmp_path):
     file_path = tmp_path / "sample.docx"
     file_path.write_bytes(b"placeholder")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
@@ -20,6 +21,43 @@ from app.services.extraction.file_types import (
 logger = logging.getLogger(__name__)
 
 _DOC_COM_LOCK = Lock()
+SPREADSHEET_FIELD_LABELS = {
+    "RAZON SOCIAL": "Razon Social",
+    "RAZON SOCIAL PROVEEDOR": "Razon Social Proveedor",
+    "NOMBRE PROVEEDOR": "Proveedor",
+    "NOMBRE DEL PROVEEDOR": "Proveedor",
+    "PROVEEDOR": "Proveedor",
+    "EMISOR": "Emisor",
+    "RFC": "RFC",
+    "R F C": "RFC",
+    "REGISTRO FEDERAL DE CONTRIBUYENTES": "RFC",
+}
+SPREADSHEET_LABEL_NOISE = {
+    "CATEGORIA",
+    "ELABORA",
+    "NEGOCIO",
+    "VIA",
+    "FECHA",
+    "TIPO DE NEGOCIO",
+    "CODIGO DE BARRAS",
+    "DESCRIPCION",
+    "COSTO BRUTO",
+    "COSTO NETO",
+}
+SPREADSHEET_NEARBY_OFFSETS = (
+    (1, 0),
+    (0, 1),
+    (1, 1),
+    (1, -1),
+    (0, -1),
+    (-1, 0),
+    (-1, 1),
+    (-1, -1),
+    (2, 0),
+    (0, 2),
+    (2, 1),
+    (1, 2),
+)
 
 
 def _clean_text(value: object) -> str:
@@ -33,6 +71,83 @@ def _clean_text(value: object) -> str:
     text = str(value).replace("\x00", " ")
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def _normalize_spreadsheet_token(value: object) -> str:
+    text = _clean_text(value).upper()
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^A-Z0-9&]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _spreadsheet_field_label(value: object) -> str | None:
+    normalized = _normalize_spreadsheet_token(value)
+    if not normalized:
+        return None
+    if normalized in SPREADSHEET_FIELD_LABELS:
+        return SPREADSHEET_FIELD_LABELS[normalized]
+    return None
+
+
+def _looks_like_spreadsheet_value(value: object) -> bool:
+    cleaned = _clean_text(value)
+    if not cleaned:
+        return False
+    if len(cleaned) < 4:
+        return False
+
+    normalized = _normalize_spreadsheet_token(cleaned)
+    if not normalized:
+        return False
+    if normalized in SPREADSHEET_FIELD_LABELS or normalized in SPREADSHEET_LABEL_NOISE:
+        return False
+    if re.fullmatch(r"[\d\s\-/.,$%]+", cleaned):
+        return False
+
+    letters = [char for char in cleaned if char.isalpha()]
+    return len(letters) >= 3
+
+
+def _cell_value(rows: list[list[object]], row_index: int, col_index: int) -> object:
+    if row_index < 0 or row_index >= len(rows):
+        return None
+    row = rows[row_index]
+    if col_index < 0 or col_index >= len(row):
+        return None
+    return row[col_index]
+
+
+def _spreadsheet_nearby_value(rows: list[list[object]], row_index: int, col_index: int) -> str | None:
+    for row_offset, col_offset in SPREADSHEET_NEARBY_OFFSETS:
+        candidate = _cell_value(rows, row_index + row_offset, col_index + col_offset)
+        if _looks_like_spreadsheet_value(candidate):
+            return _clean_text(candidate)
+    return None
+
+
+def _extract_spreadsheet_field_hints(rows: list[list[object]]) -> list[str]:
+    hints: list[str] = []
+    seen: set[tuple[str, str]] = set()
+
+    for row_index, row in enumerate(rows):
+        for col_index, value in enumerate(row):
+            label = _spreadsheet_field_label(value)
+            if not label:
+                continue
+
+            nearby_value = _spreadsheet_nearby_value(rows, row_index, col_index)
+            if not nearby_value:
+                continue
+
+            key = (label, nearby_value)
+            if key in seen:
+                continue
+
+            seen.add(key)
+            hints.append(f"{label}: {nearby_value}")
+
+    return hints
 
 
 def _join_non_empty(lines: Iterable[object]) -> str:
@@ -53,7 +168,9 @@ def _extract_text_from_openpyxl_workbook(file_path: str) -> str:
     try:
         for sheet in workbook.worksheets:
             lines.append(f"Hoja: {sheet.title}")
-            for row in sheet.iter_rows(values_only=True):
+            sheet_rows = [list(row) for row in sheet.iter_rows(values_only=True)]
+            lines.extend(_extract_spreadsheet_field_hints(sheet_rows))
+            for row in sheet_rows:
                 rendered = _render_row(row)
                 if rendered:
                     lines.append(rendered)
@@ -74,7 +191,9 @@ def _extract_text_from_tabular_workbook(file_path: str, engine: str) -> str:
     lines: list[str] = []
     for sheet_name, frame in sheets.items():
         lines.append(f"Hoja: {sheet_name}")
-        for row in frame.itertuples(index=False, name=None):
+        rows = [list(row) for row in frame.itertuples(index=False, name=None)]
+        lines.extend(_extract_spreadsheet_field_hints(rows))
+        for row in rows:
             rendered = _render_row(row)
             if rendered:
                 lines.append(rendered)

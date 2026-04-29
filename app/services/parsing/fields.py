@@ -842,7 +842,7 @@ PROVEEDOR_CONTEXT_PATTERNS = [
 ]
 PROVEEDOR_LINE_PATTERNS = [
     re.compile(
-        r"(?im)^\s*(?:RAZ[\w?]*\s+SOCI[\w?]*(?:\s+PROVEEDOR)?|PROVEEDOR|EMISOR)\s*[:\-]\s*(.+?)\s*$"
+        r"(?im)^\s*(?:RAZ[\w?]*\s+SOCI[\w?]*(?:\s+PROVEEDOR)?|PROVEEDOR|EMISOR)\s*(?:[:\-]\s*)?(.+?)\s*$"
     ),
 ]
 LEGAL_ENTITY_PATTERN = re.compile(
@@ -926,12 +926,17 @@ def extract_nombre_proveedor(text: str) -> str | None:
     cleaned = _clean_encoding_noise(text)
     search_text = _strip_accents(cleaned)
 
+    line_search_sources = [cleaned]
+    if search_text != cleaned:
+        line_search_sources.append(search_text)
+
     for pattern in PROVEEDOR_LINE_PATTERNS:
-        for m in pattern.finditer(search_text):
-            candidate = normalize_company_name(m.group(1))
-            if candidate and _looks_like_labeled_supplier_name(candidate):
-                logger.debug("Nombre proveedor extracted: %s", candidate)
-                return candidate
+        for source_text in line_search_sources:
+            for m in pattern.finditer(source_text):
+                candidate = normalize_company_name(m.group(1))
+                if candidate and _looks_like_labeled_supplier_name(candidate):
+                    logger.debug("Nombre proveedor extracted: %s", candidate)
+                    return candidate
 
     for pattern in PROVEEDOR_CONTEXT_PATTERNS:
         m = pattern.search(search_text)

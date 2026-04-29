@@ -49,6 +49,21 @@ def test_fill_rfc_from_fuzzy_name():
     assert name == "GRUPO CATANA SA"
 
 
+def test_company_typo_token_does_not_block_core_match():
+    resolver = VendorMasterResolver(
+        [
+            VendorMasterEntry(
+                vendor_name="COMPAIA COMERCIAL HERDEZ",
+                rfc="CHE041201L59",
+                vendor_name_normalized="COMPAIA COMERCIAL HERDEZ",
+                vendor_name_core="COMERCIAL HERDEZ",
+            )
+        ]
+    )
+    rfc, name = resolver.fill_missing_fields(None, "COMPANIA COMERCIAL HERDEZ, S.A de C.V")
+    assert rfc == "CHE041201L59"
+    assert name == "COMPANIA COMERCIAL HERDEZ, S.A de C.V"
+
+
 def test_canonicalize_foreign_tax_id_keeps_hyphenated_format():
     assert canonicalize_rfc("75-2218815") == "75-2218815"
-

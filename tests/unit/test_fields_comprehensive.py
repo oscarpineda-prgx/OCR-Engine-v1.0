@@ -427,6 +427,11 @@ class TestExtractNombreProveedor:
         assert "Ferrero de" in result
         assert "S.A. de C.V" in result
 
+    def test_razon_social_proveedor_label_without_colon(self):
+        text = "Raz\u00f3n Social Proveedor COMPA\u00d1\u00cdA COMERCIAL HERDEZ, S.A de C.V"
+        result = extract_nombre_proveedor(text)
+        assert result == "COMPA\u00d1\u00cdA COMERCIAL HERDEZ, S.A de C.V"
+
     def test_razon_social_beats_noisy_context_ocr(self):
         text = (
             "confirma su acuerdo con YZTOR MANUEL PACA APODACA a quien en lo sucesivo se le denominará EL PROVEEDOR\n"

@@ -2,6 +2,8 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+.DS_Store
+debug.log
 *.pyc
 *.pyo
 *.pyd
