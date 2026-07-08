@@ -3,13 +3,17 @@ import csv
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
+import subprocess
+import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from uuid import uuid4
 
 import pandas as pd
@@ -79,6 +83,9 @@ settings = get_settings()
 router = APIRouter(prefix="/batches")
 BATCH_KEY_PATTERN = re.compile(r"^BATCH-\d{8}-\d{6}-[a-f0-9]{6}$")
 MAX_UPLOAD_SIZE_BYTES = settings.max_upload_size_mb * 1024 * 1024
+DOCUMENT_PROCESS_TIMEOUT_SECONDS = 45 * 60
+_ACTIVE_BATCHES: set[str] = set()
+_ACTIVE_BATCHES_LOCK = Lock()
 
 
 def _validate_batch_key(batch_key: str) -> None:
@@ -129,6 +136,16 @@ class DocumentResult:
     error_message: str | None
     error_category: str | None = None  # "file_not_found", "extraction_empty", "unsupported_type", "processing_error"
     processing_route: str | None = None  # "digital" | "ocr" | "structured"
+
+
+@dataclass(frozen=True)
+class DocumentTask:
+    doc_id: int
+    filename: str
+    file_path: str
+    source_type: str
+    index: int
+    total: int
 
 
 def _process_single_document(
@@ -268,6 +285,198 @@ def _process_single_document(
             status="failed", error_message=f"processing error: {str(exc)}",
             error_category="processing_error",
         )
+
+
+def _failed_document_result(doc_id: int, message: str, category: str) -> DocumentResult:
+    return DocumentResult(
+        doc_id=doc_id,
+        route="pending",
+        raw_text="",
+        rfc=None,
+        rfc_hint=None,
+        fecha_documento=None,
+        fecha_hint=None,
+        tipo_documento=None,
+        nombre_proveedor=None,
+        status="failed",
+        error_message=message,
+        error_category=category,
+    )
+
+
+def _process_document_isolated(
+    doc_id: int,
+    file_path: str,
+    source_type: str,
+) -> DocumentResult:
+    env = os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "app.scripts.process_single_document",
+                "--doc-id",
+                str(doc_id),
+                "--file-path",
+                file_path,
+                "--source-type",
+                source_type,
+            ],
+            cwd=str(settings.base_dir),
+            capture_output=True,
+            env=env,
+            text=True,
+            timeout=DOCUMENT_PROCESS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return _failed_document_result(
+            doc_id,
+            f"isolated worker timed out after {DOCUMENT_PROCESS_TIMEOUT_SECONDS}s",
+            "processing_timeout",
+        )
+
+    stdout = (completed.stdout or "").strip()
+    stderr = (completed.stderr or "").strip()
+    if completed.returncode != 0:
+        error_tail = stderr[-1000:] if stderr else stdout[-1000:]
+        return _failed_document_result(
+            doc_id,
+            f"isolated worker exited with code {completed.returncode}: {error_tail}",
+            "native_processing_crash",
+        )
+
+    try:
+        payload = json.loads(stdout.splitlines()[-1])
+    except (IndexError, json.JSONDecodeError) as exc:
+        return _failed_document_result(
+            doc_id,
+            f"isolated worker returned invalid output: {exc}",
+            "processing_error",
+        )
+
+    return DocumentResult(**payload)
+
+
+def _reset_interrupted_documents(documents: list[Document]) -> int:
+    reset_count = 0
+    for doc in documents:
+        if doc.status != "processing":
+            continue
+        doc.status = "pending"
+        doc.updated_at = datetime.now(timezone.utc)
+        reset_count += 1
+    return reset_count
+
+
+def _apply_document_result(
+    *,
+    db: Session,
+    doc: Document,
+    result: DocumentResult,
+    vendor_master_resolver: VendorMasterResolver,
+    source_path: str | None,
+) -> str:
+    doc.route = result.route
+    doc.raw_text = result.raw_text
+    doc.status = result.status
+    doc.error_message = result.error_message
+    doc.error_category = result.error_category
+    doc.processing_route = result.processing_route
+    doc.updated_at = datetime.now(timezone.utc)
+
+    if result.status == "failed":
+        doc.rfc = None
+        doc.fecha_documento = None
+        doc.tipo_documento = None
+        doc.nombre_proveedor = None
+        doc.quality_score = None
+        doc.quality_traffic_light = None
+        doc.quality_reasons = None
+        doc.field_confidence_json = None
+        db.add(DocumentProcessingLog(
+            document_id=doc.id,
+            action="processed",
+            status="failed",
+            error_category=result.error_category,
+            error_message=result.error_message,
+            details_json=json.dumps({"route": result.route, "processing_route": result.processing_route}),
+        ))
+        return "failed"
+
+    doc.rfc = result.rfc
+    doc.fecha_documento = result.fecha_documento
+    doc.tipo_documento = result.tipo_documento
+    doc.nombre_proveedor = result.nombre_proveedor
+
+    doc.rfc, doc.nombre_proveedor = vendor_master_resolver.fill_missing_fields(
+        rfc=doc.rfc,
+        nombre_proveedor=doc.nombre_proveedor,
+    )
+
+    path_vendor_fallback = None
+    if not doc.rfc and not doc.nombre_proveedor:
+        fallback_source = source_path or doc.file_path
+        path_vendor_fallback = resolve_vendor_from_path(fallback_source, vendor_master_resolver)
+        if path_vendor_fallback:
+            doc.rfc = path_vendor_fallback.rfc
+            doc.nombre_proveedor = path_vendor_fallback.nombre_proveedor
+
+    quality = score_document_fields(
+        rfc=doc.rfc,
+        fecha_documento=doc.fecha_documento,
+        tipo_documento=doc.tipo_documento,
+        nombre_proveedor=doc.nombre_proveedor,
+    )
+    doc.quality_score = quality["score"]
+    doc.quality_traffic_light = quality["traffic_light"]
+    doc.quality_reasons = ",".join(quality["reasons"]) if quality["reasons"] else None
+    doc.field_confidence_json = json.dumps(quality["field_confidence"])
+
+    log_details = {
+        "route": result.route,
+        "processing_route": result.processing_route,
+        "rfc_hint": result.rfc_hint,
+        "fecha_hint": result.fecha_hint,
+        "field_confidence": quality["field_confidence"],
+    }
+    if path_vendor_fallback:
+        log_details["path_vendor_fallback"] = path_vendor_fallback.to_log_dict()
+
+    db.add(DocumentProcessingLog(
+        document_id=doc.id,
+        action="processed",
+        status="success",
+        details_json=json.dumps(log_details),
+    ))
+    return "processed"
+
+
+def _submit_document_task(
+    *,
+    executor: ThreadPoolExecutor,
+    futures: dict,
+    db: Session,
+    doc: Document,
+    index: int,
+    total: int,
+) -> None:
+    doc.status = "processing"
+    doc.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    task = DocumentTask(
+        doc_id=doc.id,
+        filename=doc.filename,
+        file_path=doc.file_path,
+        source_type=doc.source_type,
+        index=index,
+        total=total,
+    )
+    logger.info("Submitted document %d/%d for isolated processing: %s", index, total, doc.filename)
+    futures[executor.submit(_process_document_isolated, doc.id, doc.file_path, doc.source_type)] = task
 
 
 # ---------------------------------------------------------------------------
@@ -511,178 +720,154 @@ def process_batch(batch_key: str, db: Session = Depends(get_db)) -> dict:
     if not documents:
         raise HTTPException(status_code=400, detail="Batch has no documents")
 
-    if batch.status == "processing":
-        raise HTTPException(status_code=409, detail="Batch is already processing")
+    with _ACTIVE_BATCHES_LOCK:
+        if batch_key in _ACTIVE_BATCHES:
+            raise HTTPException(status_code=409, detail="Batch is already processing in this API process")
+        _ACTIVE_BATCHES.add(batch_key)
 
-    pending_docs = [doc for doc in documents if doc.status == "pending"]
-    if not pending_docs:
-        raise HTTPException(status_code=400, detail="Batch has no pending documents")
+    try:
+        reset_count = _reset_interrupted_documents(documents)
+        if reset_count:
+            logger.warning("Recovered %d interrupted documents in batch %s", reset_count, batch_key)
+            db.commit()
+            documents = db.query(Document).filter(Document.batch_id == batch.id).all()
 
-    start_clock = time.perf_counter()
-    batch.status = "processing"
-    batch.processing_started_at = datetime.now(timezone.utc)
-    batch.processing_finished_at = None
-    batch.processing_seconds = None
-    db.commit()
-    db.refresh(batch)
-
-    # Prepare: load vendor master once, build doc-id/source maps
-    vendor_master_resolver = VendorMasterResolver.from_db(db)
-    source_paths_by_document_id = load_link2026_source_paths(batch_key)
-    doc_map: dict[int, Document] = {}
-    tasks: list[tuple[int, str, str]] = []
-
-    for doc in pending_docs:
-        doc.status = "processing"
-        doc_map[doc.id] = doc
-        tasks.append((doc.id, doc.file_path, doc.source_type))
-    db.commit()
-
-    processed_count = 0
-    failed_count = 0
-    max_workers = min(settings.max_workers, len(tasks)) or 1
-
-    logger.info(
-        "Processing batch %s: %d documents with %d workers",
-        batch_key, len(tasks), max_workers,
-    )
-
-    # --- Phase 1: Parallel OCR + field extraction (no DB access) ---
-    results: list[DocumentResult] = []
-
-    if len(tasks) == 1:
-        # Single document — no thread overhead
-        t = tasks[0]
-        results.append(_process_single_document(t[0], t[1], t[2]))
-    else:
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(
-                    _process_single_document,
-                    doc_id, file_path, source_type,
-                ): doc_id
-                for doc_id, file_path, source_type in tasks
+        pending_docs = [doc for doc in documents if doc.status == "pending"]
+        if not pending_docs:
+            refreshed_docs = db.query(Document).filter(Document.batch_id == batch.id).all()
+            batch.status = compute_batch_status(refreshed_docs)
+            if batch.status != "processing" and batch.processing_finished_at is None:
+                batch.processing_finished_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(batch)
+            processed_total = sum(doc.status == "processed" for doc in refreshed_docs)
+            failed_total = sum(doc.status == "failed" for doc in refreshed_docs)
+            return {
+                "message": "batch has no pending documents",
+                "batch_key": batch.batch_key,
+                "batch_status": batch.status,
+                "total_documents": len(refreshed_docs),
+                "processed_count": processed_total,
+                "failed_count": failed_total,
+                "processing_seconds": batch.processing_seconds,
             }
-            for future in as_completed(futures):
+
+        start_clock = time.perf_counter()
+        batch.status = "processing"
+        if batch.processing_started_at is None:
+            batch.processing_started_at = datetime.now(timezone.utc)
+        batch.processing_finished_at = None
+        batch.processing_seconds = None
+        db.commit()
+        db.refresh(batch)
+
+        vendor_master_resolver = VendorMasterResolver.from_db(db)
+        source_paths_by_document_id = load_link2026_source_paths(batch_key)
+        processed_count = 0
+        failed_count = 0
+        max_workers = min(settings.max_workers, len(pending_docs)) or 1
+
+        logger.info(
+            "Processing batch %s: %d pending documents with %d isolated workers",
+            batch_key, len(pending_docs), max_workers,
+        )
+
+        # The API only orchestrates here; extraction runs in child Python processes
+        # so native crashes from pdfium.dll cannot take down the main API process.
+        pending_iter = iter(enumerate(pending_docs, start=1))
+        futures: dict = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for _ in range(max_workers):
                 try:
-                    result = future.result()
-                    results.append(result)
-                except Exception as exc:
-                    doc_id = futures[future]
-                    logger.exception("Unexpected error processing doc %d", doc_id)
-                    results.append(DocumentResult(
-                        doc_id=doc_id, route="pending", raw_text="",
-                        rfc=None, rfc_hint=None, fecha_documento=None, fecha_hint=None,
-                        tipo_documento=None, nombre_proveedor=None,
-                        status="failed", error_message=f"thread error: {str(exc)}",
-                    ))
+                    index, doc = next(pending_iter)
+                except StopIteration:
+                    break
+                _submit_document_task(
+                    executor=executor,
+                    futures=futures,
+                    db=db,
+                    doc=doc,
+                    index=index,
+                    total=len(pending_docs),
+                )
 
-    # --- Phase 2: Sequential DB update + vendor master fill + quality scoring ---
-    for result in results:
-        doc = doc_map.get(result.doc_id)
-        if doc is None:
-            continue
+            while futures:
+                done_futures, _ = wait(futures, return_when=FIRST_COMPLETED)
+                for future in done_futures:
+                    task = futures.pop(future)
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        logger.exception("Unexpected isolated worker failure for doc %d", task.doc_id)
+                        result = _failed_document_result(
+                            task.doc_id,
+                            f"isolated worker wrapper error: {exc}",
+                            "processing_error",
+                        )
 
-        doc.route = result.route
-        doc.raw_text = result.raw_text
-        doc.status = result.status
-        doc.error_message = result.error_message
-        doc.error_category = result.error_category
-        doc.processing_route = result.processing_route
+                    doc = db.get(Document, task.doc_id)
+                    if doc is None:
+                        logger.warning("Document %d disappeared before result could be saved", task.doc_id)
+                    else:
+                        applied_status = _apply_document_result(
+                            db=db,
+                            doc=doc,
+                            result=result,
+                            vendor_master_resolver=vendor_master_resolver,
+                            source_path=source_paths_by_document_id.get(doc.id),
+                        )
+                        if applied_status == "processed":
+                            processed_count += 1
+                        else:
+                            failed_count += 1
+                        db.commit()
+                        logger.info(
+                            "Finished document %d/%d in %s: %s -> %s",
+                            task.index,
+                            task.total,
+                            batch_key,
+                            task.filename,
+                            applied_status,
+                        )
 
-        if result.status == "failed":
-            doc.rfc = None
-            doc.fecha_documento = None
-            doc.tipo_documento = None
-            doc.nombre_proveedor = None
-            doc.quality_score = None
-            doc.quality_traffic_light = None
-            doc.quality_reasons = None
-            doc.field_confidence_json = None
-            failed_count += 1
-            # Log failed processing
-            db.add(DocumentProcessingLog(
-                document_id=doc.id, action="processed", status="failed",
-                error_category=result.error_category,
-                error_message=result.error_message,
-                details_json=json.dumps({"route": result.route, "processing_route": result.processing_route}),
-            ))
-            continue
+                    try:
+                        index, next_doc = next(pending_iter)
+                    except StopIteration:
+                        continue
+                    _submit_document_task(
+                        executor=executor,
+                        futures=futures,
+                        db=db,
+                        doc=next_doc,
+                        index=index,
+                        total=len(pending_docs),
+                    )
 
-        doc.rfc = result.rfc
-        doc.fecha_documento = result.fecha_documento
-        doc.tipo_documento = result.tipo_documento
-        doc.nombre_proveedor = result.nombre_proveedor
+        refreshed_docs = db.query(Document).filter(Document.batch_id == batch.id).all()
+        batch.status = compute_batch_status(refreshed_docs)
+        batch.processing_finished_at = datetime.now(timezone.utc)
+        batch.processing_seconds = round(time.perf_counter() - start_clock, 3)
 
-        # Vendor master fill (needs resolver — runs sequentially)
-        doc.rfc, doc.nombre_proveedor = vendor_master_resolver.fill_missing_fields(
-            rfc=doc.rfc,
-            nombre_proveedor=doc.nombre_proveedor,
+        db.commit()
+        db.refresh(batch)
+
+        logger.info(
+            "Batch %s done: %d processed, %d failed in %.1fs",
+            batch_key, processed_count, failed_count, batch.processing_seconds,
         )
 
-        path_vendor_fallback = None
-        if not doc.rfc and not doc.nombre_proveedor:
-            source_path = source_paths_by_document_id.get(doc.id) or doc.file_path
-            path_vendor_fallback = resolve_vendor_from_path(source_path, vendor_master_resolver)
-            if path_vendor_fallback:
-                doc.rfc = path_vendor_fallback.rfc
-                doc.nombre_proveedor = path_vendor_fallback.nombre_proveedor
-
-        # Quality scoring
-        quality = score_document_fields(
-            rfc=doc.rfc,
-            fecha_documento=doc.fecha_documento,
-            tipo_documento=doc.tipo_documento,
-            nombre_proveedor=doc.nombre_proveedor,
-        )
-        doc.quality_score = quality["score"]
-        doc.quality_traffic_light = quality["traffic_light"]
-        doc.quality_reasons = ",".join(quality["reasons"]) if quality["reasons"] else None
-        doc.field_confidence_json = json.dumps(quality["field_confidence"])
-
-        # Audit log
-        log_details = {
-            "route": result.route,
-            "processing_route": result.processing_route,
-            "rfc_hint": result.rfc_hint,
-            "fecha_hint": result.fecha_hint,
-            "field_confidence": quality["field_confidence"],
+        return {
+            "message": "batch processed",
+            "batch_key": batch.batch_key,
+            "batch_status": batch.status,
+            "total_documents": len(refreshed_docs),
+            "processed_count": processed_count,
+            "failed_count": failed_count,
+            "processing_seconds": batch.processing_seconds,
         }
-        if path_vendor_fallback:
-            log_details["path_vendor_fallback"] = path_vendor_fallback.to_log_dict()
-
-        db.add(DocumentProcessingLog(
-            document_id=doc.id, action="processed", status="success",
-            details_json=json.dumps(log_details),
-        ))
-
-        processed_count += 1
-
-    db.flush()
-
-    refreshed_docs = db.query(Document).filter(Document.batch_id == batch.id).all()
-    batch.status = compute_batch_status(refreshed_docs)
-    batch.processing_finished_at = datetime.now(timezone.utc)
-    batch.processing_seconds = round(time.perf_counter() - start_clock, 3)
-
-    db.commit()
-    db.refresh(batch)
-
-    logger.info(
-        "Batch %s done: %d processed, %d failed in %.1fs",
-        batch_key, processed_count, failed_count, batch.processing_seconds,
-    )
-
-    return {
-        "message": "batch processed",
-        "batch_key": batch.batch_key,
-        "batch_status": batch.status,
-        "total_documents": len(documents),
-        "processed_count": processed_count,
-        "failed_count": failed_count,
-        "processing_seconds": batch.processing_seconds,
-    }
-
+    finally:
+        with _ACTIVE_BATCHES_LOCK:
+            _ACTIVE_BATCHES.discard(batch_key)
 
 @router.get("/{batch_key}/export/csv")
 def export_batch_csv(batch_key: str, db: Session = Depends(get_db)) -> FileResponse:
